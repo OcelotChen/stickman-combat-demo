@@ -2,6 +2,8 @@
 
 试玩：https://ocelotchen.github.io/stickman-combat-demo/
 
+长剑图样预览：https://ocelotchen.github.io/stickman-combat-demo/preview.html
+
 使用 JavaScript / Canvas，复用 D 战斗原型 d-duel-draft-0.4 的动作、精力、武器轮廓、AI 和模拟循环。支持 AI、同键盘双人对战、夺剑；蓄力 0.6 秒，抬剑格挡与双剑弹刀。
 
 每个浏览器独立模拟，不提供跨电脑在线联机或服务器防作弊。课程所需 Node/Python 云服务器保留在团队的原始项目中，此公开页面只是试玩入口。武器、几何公式和数值为待评审草案。
