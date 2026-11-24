@@ -16,6 +16,17 @@
     @media(max-width:700px){.wrap{padding:0 12px}.masthead{height:55px}.brand span,.draft{display:none}.intro{padding:18px 0;align-items:flex-start}h1{font-size:23px}.subtitle{max-width:230px;font-size:12px}.stats{gap:12px}.stat{font-size:9px}.stat strong{font-size:18px}.stat strong small{font-size:10px}.hud{left:12px;right:12px;top:11px;gap:8px}.fighter{width:29%}.fighter-label{font-size:9px}.fighter-label strong{font-size:13px}.round-info{font-size:9px}.round-info strong{font-size:12px}.cooldown{font-size:9px}.controls{gap:10px;grid-template-columns:1fr}.control-group.right{justify-content:flex-start}.card{padding:16px 25px;max-width:310px}.card h2{font-size:22px}.card p{font-size:12px;margin-bottom:12px}.card .hint{margin-top:7px}.notes{flex-direction:column;gap:4px}.world-caption{font-size:8px;bottom:8px}.connection{font-size:10px}.toolbar{gap:7px}}
     @media(max-width:460px){.intro{flex-direction:column;gap:13px}.subtitle{max-width:none}.stats{width:100%;justify-content:space-between}.fighter{width:33%}.fighter-label strong{font-size:11px}.energy-label{font-size:8px}.cooldown{font-size:8px}.world-caption{font-size:7px;left:8px}.card{padding:12px 14px;max-width:94%}.card h2{font-size:19px;margin:5px 0}.card p{font-size:10px;margin-bottom:8px}.card .hint{display:none}.card button{padding:6px 12px}.fighter-label{letter-spacing:0}}
     .exit-fullscreen{display:none;position:absolute;bottom:16px;right:16px;z-index:2}.arena:fullscreen{border:0;border-radius:0;display:flex;align-items:center;justify-content:center}.arena:fullscreen canvas{width:100%;height:100%;object-fit:contain}.arena:fullscreen .hud{top:20px}.arena:fullscreen .world-caption{font-size:14px;bottom:20px}.arena:fullscreen .exit-fullscreen{display:block}
+    .debug-controls{position:absolute;inset:auto 12px 10px;display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;pointer-events:none}
+    #debug-toggle{pointer-events:auto;white-space:nowrap;padding:5px 10px;font-size:12px;background:#faf9f4ed}
+    #debug-toggle[aria-pressed="true"]{background:#244e4b;color:#fff;border-color:#244e4b}
+    #debug-legend{margin-right:auto;background:#faf9f4ef;color:#273534;font-size:clamp(10px,1.2vw,13px);line-height:1.5;padding:3px 7px;border-left:2px solid #67796c}
+    .debug-key{display:inline-flex;gap:0.3em;align-items:center;white-space:nowrap;margin-right:0.65em}
+    .debug-key i{width:11px;height:6px;border:1.5px solid #008477;transform:skew(-25deg)}
+    .debug-key.box i{border-color:#2463a0;transform:none;height:9px}
+    .debug-key.trace i{border:0;height:4px;background:#a65d12;transform:none}
+    .debug-key.point b{color:#b12f34}#debug-result{display:block;font-variant-numeric:tabular-nums}
+    .arena:fullscreen .debug-controls{right:110px}
+    @media(max-width:600px){.debug-controls{inset:auto 5px 4px;gap:3px}#debug-toggle{font-size:10px;padding:4px}#debug-legend{padding:1px 4px}.debug-key{margin-right:0.35em}}
   </style>
 </head>
 <body>
@@ -28,6 +39,13 @@
     <div class="hud"><div class="fighter"><div class="fighter-label"><span>P1 / 你</span><strong id="hp-a">100 / 100</strong></div><div class="hp"><div id="bar-a" class="hp-fill"></div></div><div class="energy-label"><span>精力</span><span id="stamina-a">100 / 100</span></div><div id="stamina-meter-a" class="energy" role="progressbar" aria-label="P1 精力" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><div id="stamina-bar-a" class="energy-fill"></div></div><div id="action-a" class="cooldown">可以攻击</div></div><div class="round-info"><span id="round-mode">近战练习</span><strong id="round-phase">准备开局</strong></div><div class="fighter right"><div class="fighter-label"><strong id="hp-b">100 / 100</strong><span id="name-b">AI / 对手</span></div><div class="hp"><div id="bar-b" class="hp-fill"></div></div><div class="energy-label"><span>精力</span><span id="stamina-b">100 / 100</span></div><div id="stamina-meter-b" class="energy" role="progressbar" aria-label="P2 精力" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><div id="stamina-bar-b" class="energy-fill"></div></div><div id="action-b" class="cooldown">可以攻击</div></div></div>
     <div id="overlay" class="overlay"><div class="card"><span class="eyebrow">SLASH / THRUST / GUARD</span><h2 id="overlay-title">拔剑，开始练习</h2><p id="overlay-copy">左键短按挥砍，长按 0.6 秒后松开刺击。<br>右键格挡挥砍，S 蹲伏躲避高位攻击。</p><button id="start" class="primary">开始试玩</button><span class="hint" id="overlay-hint">A / D 移动 · W 跳跃 · S 蹲伏 · E 拾取</span></div></div>
     <div class="world-caption">鼠标瞄准前方 180° · 左键挥砍 / 蓄力刺击 · 右键定向格挡</div>
+    <div class="debug-controls">
+      <div id="debug-legend" hidden>
+        <span class="debug-key"><i></i>剑身</span><span class="debug-key box"><i></i>受击框</span><span class="debug-key trace"><i></i>上次判定范围</span><span class="debug-key point"><b aria-hidden="true">⊕</b>接触点</span>
+        <span id="debug-result" role="status">等待本局首次判定</span>
+      </div>
+      <button id="debug-toggle" aria-pressed="false" aria-keyshortcuts="H" aria-controls="debug-legend">判定视图 <kbd>H</kbd></button>
+    </div>
     <button id="exit-fullscreen" class="exit-fullscreen">退出全屏</button>
   </main>
   <div class="controls">

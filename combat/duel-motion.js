@@ -6,6 +6,11 @@ const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 const mix = (a, b, t) => a + (b - a) * t;
 const smooth = t => t * t * (3 - 2 * t);
 
+export function hurtbox(player, rules) {
+  return { minX: player.x - player.radius, maxX: player.x + player.radius,
+    minY: player.y + (player.crouching ? rules.crouchingTop : rules.standingTop), maxY: player.y + rules.feet };
+}
+
 export function slashAngle(elapsed) {
   if (elapsed < 120) return mix(0, -0.85, smooth(clamp(elapsed / 120, 0, 1)));
   if (elapsed < 240) return mix(-0.85, 0.85, smooth(clamp((elapsed - 120) / 120, 0, 1)));

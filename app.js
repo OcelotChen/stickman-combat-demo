@@ -1,7 +1,7 @@
 import { PlayArena } from './arena.js';
 const previewArena = new PlayArena();
 setInterval(() => previewArena.step(), 25);
-import { slashAngle as swingAngle, swordPose, SWORD_VIEW } from './combat/duel-motion.js';
+import { hurtbox, slashAngle as swingAngle, swordOutline, swordPose, SWORD_VIEW } from './combat/duel-motion.js';
 const $ = id => document.getElementById(id);
 let canvas = $('game');
 let gl = canvas.getContext('webgl', { alpha: false, antialias: true, stencil: true });
@@ -29,6 +29,7 @@ let state, previous, receivedAt = 0, previousAt = 0, focused = false, starting =
 let frame = 0, seenEvents = new Set(), particles = [], floaters = [], pendingImpactAt = null;
 let lastInputError = '', pollFailures = 0, roundStartedAt = 0;
 let mouseAim = null, lastAimSentAt = 0;
+let debugEnabled = false, lastJudgment = null;
 const ink = 0x22282d, paper = 0xfaf9f4;
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 const mix = (a, b, t) => a + (b - a) * t;
@@ -45,6 +46,8 @@ async function request(path, data) {
 function ingest(next) {
   const now = performance.now();
   if (!state || state.matchId !== next.matchId) {
+    lastJudgment = null;
+    $('debug-result').textContent = '等待本局首次判定';
     previous = next; previousAt = now - 50;
     seenEvents = new Set(); pendingImpactAt = null; particles = []; floaters = []; lastInputError = ''; crouchPoses.clear(); guardPoses.clear(); mouseAim = null;
     roundStartedAt = next.startedAt; sequence.a = 0; sequence.b = 0; $('mode').value = next.mode;
@@ -61,6 +64,10 @@ function ingest(next) {
   for (const event of next.events) {
     if (seenEvents.has(event.eventId)) continue;
     seenEvents.add(event.eventId);
+    if (['combat:hit', 'combat:miss', 'combat:blocked', 'combat:guard_break', 'combat:clash'].includes(event.type)) {
+      lastJudgment = event;
+      $('debug-result').textContent = describeJudgment(event);
+    }
     if (event.type === 'combat:hit') {
       const target = next.players.find(p => p.playerId === event.targetId);
       pendingImpactAt = event.occurredAt;
@@ -159,6 +166,16 @@ async function startRound() {
 }
 $('start').addEventListener('click', startRound);
 $('restart').addEventListener('click', startRound);
+function toggleDebug() {
+  debugEnabled = !debugEnabled;
+  $('debug-toggle').setAttribute('aria-pressed', String(debugEnabled));
+  $('debug-legend').hidden = !debugEnabled;
+  document.querySelector('.world-caption').hidden = debugEnabled;
+}
+$('debug-toggle').addEventListener('click', () => {
+  toggleDebug();
+  if (state?.phase === 'playing') { canvas.focus(); focused = true; }
+});
 $('fullscreen').addEventListener('click', async () => {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
@@ -199,6 +216,10 @@ canvas.addEventListener('pointerup', event => {
 canvas.addEventListener('pointercancel', () => { pointerActions.a.delete('primary'); sendInput('a', true); });
 window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLSelectElement || event.target instanceof HTMLInputElement) return;
+  if (event.code === 'KeyH' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) {
+    if (!event.repeat) toggleDebug();
+    event.preventDefault(); return;
+  }
   if (event.code === 'KeyR' && !event.repeat) { event.preventDefault(); startRound(); return; }
   if (!keyMap[event.code] || !focused) return;
   event.preventDefault();
@@ -400,6 +421,54 @@ function renderHud(now) {
   $('error').textContent = lastInputError || results[actionResult] || '';
 }
 
+function describeJudgment({ type, result, actorId, targetId }) {
+  const action = result.action === 'thrust' ? '刺击' : '挥砍';
+  const labels = { 'combat:blocked': '剑挡', 'combat:guard_break': '破防', 'combat:clash': '弹刀',
+    'combat:hit': (result.guardBroken ? '破防 · ' : '') + action + '命中', 'combat:miss': action + '落空' };
+  const point = result.bodyContact ?? result.contact;
+  const coords = point ? ` (${Math.round(point.x)}, ${Math.round(point.y)})` : '';
+  return `上次 · ${playerName(actorId)} → ${playerName(targetId)} · ${labels[type]}${coords}`;
+}
+
+function drawDebug(g) {
+  // Keep live geometry on simulation ticks. Cosmetic pose smoothing would move the colliders.
+  g.clear();
+  for (const player of state.players) {
+    if (player.hp <= 0) continue;
+    const box = hurtbox(player, state.duelRules);
+    const width = box.maxX - box.minX, height = box.maxY - box.minY;
+    g.fillStyle(0x2463a0, 0.06).fillRect(box.minX, box.minY, width, height);
+    g.lineStyle(2, 0x2463a0).strokeRect(box.minX, box.minY, width, height);
+    const weapon = state.weapons.find(w => w.weaponId === player.equippedWeaponId);
+    if (!weapon) continue;
+    const swing = state.now < player.swing?.endsAt ? player.swing : null;
+    const outline = swordOutline(player, swing, weapon, state.now);
+    g.fillStyle(0x008477, 0.14).fillPoints(outline, true);
+    g.lineStyle(2.5, 0x008477).strokePoints(outline, true);
+  }
+
+  const result = lastJudgment?.result, trace = result?.trace;
+  if (!trace) return;
+  const amber = 0xa65d12;
+  if (trace.blades) {
+    for (const outline of trace.blades) g.lineStyle(1.8, amber, 0.85).strokePoints(outline, true);
+  }
+  if (trace.box && (!trace.blades || result.bodyContact)) {
+    const { start, end, radius, box } = trace;
+    g.lineStyle(1.5, amber, 0.75).strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+    g.lineStyle(radius * 2, amber, 0.17).lineBetween(start.x, start.y, end.x, end.y);
+    g.fillStyle(amber, 0.17).fillCircle(start.x, start.y, radius).fillCircle(end.x, end.y, radius);
+    g.lineStyle(1.5, amber).lineBetween(start.x, start.y, end.x, end.y);
+  }
+  for (const point of [result.contact, result.bodyContact]) {
+    if (!point) continue;
+    const { x, y } = point;
+    g.fillStyle(0xfff9ee).fillCircle(x, y, 5);
+    g.lineStyle(2, 0xb12f34).strokeCircle(x, y, 5);
+    g.lineBetween(x - 8, y, x + 8, y).lineBetween(x, y - 8, x, y + 8);
+  }
+}
+
 class CombatScene extends Phaser.Scene {
   constructor() { super('Duel'); }
 
@@ -418,6 +487,7 @@ class CombatScene extends Phaser.Scene {
     }]));
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     this.sparks = this.add.graphics().setDepth(3);
+    this.debugLayer = this.add.graphics().setDepth(5).setVisible(false);
     this.eventLabels = [];
     canvas.dataset.renderer = 'Phaser ' + Phaser.VERSION;
     canvas.dataset.backend = this.game.renderer.type === Phaser.WEBGL ? 'WebGL' : 'Canvas';
@@ -480,6 +550,8 @@ class CombatScene extends Phaser.Scene {
         label.setAlpha(clamp(1 - elapsed / 850, 0, 1)).setPosition(floater.x, floater.y - elapsed * 0.04).setText(floater.text);
       }
     }
+    this.debugLayer.setVisible(debugEnabled);
+    if (debugEnabled) drawDebug(this.debugLayer);
     renderHud(now);
     canvas.dataset.frame = String(++frame); canvas.dataset.phase = state.phase;
   }

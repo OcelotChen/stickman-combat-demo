@@ -1,8 +1,8 @@
 const randomUUID = () => crypto.randomUUID();
 import { evaluateWeapon } from './weapon.js';
 import { DUEL_RULES } from './duel-rules.js';
-import { segmentHitsBox, polygonContact } from './aim-geometry.js';
-import { swordPose, swordOutline } from './duel-motion.js';
+import { capsuleBoxContact, polygonContact } from './aim-geometry.js';
+import { hurtbox, swordPose, swordOutline } from './duel-motion.js';
 import { DEFAULT_CATEGORY_ACTIONS, LIMITS, MAX_HP, PICKUP_DISTANCE, PLAYER_RADIUS, isId, isRecord, validateCategoryActions } from './rules.js';
 
 const messages = {
@@ -291,13 +291,13 @@ export class CombatEngine {
     const vector = { x: facing * Math.cos(aimAngle), y: Math.sin(aimAngle) };
     const start = { x: actor.x, y: actor.y + (swing.crouching ? rule.crouchingHeight : rule.height) };
     const end = { x: start.x + vector.x * reach, y: start.y + vector.y * reach };
-    const box = { minX: target.x - target.radius, maxX: target.x + target.radius,
-      minY: target.y + (target.crouching ? DUEL_RULES.crouchingTop : DUEL_RULES.standingTop), maxY: target.y + DUEL_RULES.feet };
-    const intersects = segmentHitsBox(start, end, box, rule.halfHeight);
+    const box = hurtbox(target, DUEL_RULES);
+    const bodyContact = capsuleBoxContact(start, end, box, rule.halfHeight);
     const missReason = dx * facing < 0 ? 'NOT_FACING' : Math.abs(dx) > reach + target.radius + rule.halfHeight ? 'OUT_OF_RANGE' :
-      intersects ? null : Math.abs(aimAngle) < 1e-9 && (start.y + rule.halfHeight < box.minY || start.y - rule.halfHeight > box.maxY) ? 'OUT_OF_HEIGHT' : 'OUT_OF_AIM';
+      bodyContact ? null : Math.abs(aimAngle) < 1e-9 && (start.y + rule.halfHeight < box.minY || start.y - rule.halfHeight > box.maxY) ? 'OUT_OF_HEIGHT' : 'OUT_OF_AIM';
     const result = { pending: false, swingId: swing.swingId, action, attackType: action === 'thrust' ? 'melee-thrust' : stats.attackType,
-      readyAt: actor.readyAt, aimAngle, hit: false, damage: 0, hpBefore: target.hp, hpAfter: target.hp, killed: false };
+      readyAt: actor.readyAt, aimAngle, hit: false, damage: 0, hpBefore: target.hp, hpAfter: target.hp, killed: false,
+      trace: { start, end, radius: rule.halfHeight, box } };
     if (missReason) {
       result.missReason = missReason;
       return { accepted: true, result, events: [this.#event('combat:miss', actor.playerId, target.playerId, weapon.weaponId, now, result)], replayed: false };
@@ -305,11 +305,13 @@ export class CombatEngine {
     const guardVector = { x: (target.facing === 'right' ? 1 : -1) * Math.cos(target.aimAngle), y: Math.sin(target.aimAngle) };
     const frontalGuard = target.blocking && (target.facing === 'right' ? -dx : dx) >= 0 &&
       -vector.x * guardVector.x - vector.y * guardVector.y >= Math.cos(DUEL_RULES.guardHalfAngle) - 1e-9;
-    const guardContact = frontalGuard && action === 'slash' ? polygonContact(swordOutline(actor, swing, weapon, now),
-      swordOutline(target, null, this.#weapons.get(target.equippedWeaponId), now)) : null;
+    const blades = frontalGuard && action === 'slash' ? [swordOutline(actor, swing, weapon, now),
+      swordOutline(target, null, this.#weapons.get(target.equippedWeaponId), now)] : null;
+    const guardContact = blades && polygonContact(...blades);
     const events = [];
     if (guardContact) {
       result.contact = guardContact;
+      result.trace.blades = blades;
       if (this.#spend(target, DUEL_RULES.blockCost, now)) {
         target.guardHitAt = now;
         Object.assign(result, { blocked: true, staminaCost: DUEL_RULES.blockCost });
@@ -325,7 +327,7 @@ export class CombatEngine {
     target.hp -= result.damage;
     target.staggerUntil = now + DUEL_RULES.hurtStaggerMs;
     this.cancelCharge(target.playerId); target.blocking = false;
-    Object.assign(result, { hit: true, hpAfter: target.hp, killed: target.hp === 0 });
+    Object.assign(result, { hit: true, bodyContact, hpAfter: target.hp, killed: target.hp === 0 });
     events.push(this.#event('combat:hit', actor.playerId, target.playerId, weapon.weaponId, now, result));
     if (result.killed) events.push(this.#event('combat:kill', actor.playerId, target.playerId, weapon.weaponId, now, result));
     return { accepted: true, result, events, replayed: false };
@@ -356,8 +358,9 @@ export class CombatEngine {
       const count = Math.max(1, Math.ceil((to - from) / DUEL_RULES.clashSampleMs));
       for (let step = 0; step <= count; step++) {
         const time = from + (to - from) * step / count, aa = poseAt(a, time), bb = poseAt(b, time);
-        const contact = polygonContact(swordOutline(aa, a, this.#weapons.get(a.weaponId), time),
-          swordOutline(bb, b, this.#weapons.get(b.weaponId), time));
+        const blades = [swordOutline(aa, a, this.#weapons.get(a.weaponId), time),
+          swordOutline(bb, b, this.#weapons.get(b.weaponId), time)];
+        const contact = polygonContact(...blades);
         if (!contact) continue;
         const reboundUntil = now + DUEL_RULES.clashReboundMs;
         const participants = [[a, aa], [b, bb]].map(([swing, pose]) => {
@@ -370,7 +373,7 @@ export class CombatEngine {
         });
         events.push(this.#event('combat:clash', a.actorId, b.actorId, a.weaponId, now,
           { action: 'slash', clashed: true, pending: false, hit: false, damage: 0, contact,
-            contactAt: time, reboundUntil, staminaCost: 0, participants }));
+            contactAt: time, trace: { blades }, reboundUntil, staminaCost: 0, participants }));
         break;
       }
     }

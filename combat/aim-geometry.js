@@ -1,8 +1,3 @@
-const pointBoxDistance2 = (point, box) => {
-  const dx = Math.max(box.minX - point.x, 0, point.x - box.maxX);
-  const dy = Math.max(box.minY - point.y, 0, point.y - box.maxY);
-  return dx * dx + dy * dy;
-};
 const pointSegmentDistance2 = (point, start, end) => {
   const dx = end.x - start.x, dy = end.y - start.y;
   const length2 = dx * dx + dy * dy;
@@ -11,8 +6,8 @@ const pointSegmentDistance2 = (point, start, end) => {
   return (point.x - start.x - t * dx) ** 2 + (point.y - start.y - t * dy) ** 2;
 };
 
-// A finite capsule against a standing/crouched axis-aligned hurtbox. No infinite ray hits.
-export function segmentHitsBox(start, end, box, radius) {
+// A witness on the hurtbox inside the finite attack capsule, in world coordinates.
+export function capsuleBoxContact(start, end, box, radius) {
   let low = 0, high = 1;
   for (const axis of ['X', 'Y']) {
     const key = axis.toLowerCase(), delta = end[key] - start[key];
@@ -23,12 +18,22 @@ export function segmentHitsBox(start, end, box, radius) {
       low = Math.max(low, Math.min(a, b)); high = Math.min(high, Math.max(a, b));
     }
   }
-  if (low <= high) return true;
-  let distance2 = Math.min(pointBoxDistance2(start, box), pointBoxDistance2(end, box));
-  for (const x of [box.minX, box.maxX]) for (const y of [box.minY, box.maxY]) {
-    distance2 = Math.min(distance2, pointSegmentDistance2({ x, y }, start, end));
+  if (low <= high) return { x: start.x + low * (end.x - start.x), y: start.y + low * (end.y - start.y) };
+  // Otherwise the closest pair uses a segment endpoint or a rectangle corner.
+  const radius2 = radius * radius + 1e-9;
+  for (const point of [start, end]) {
+    const x = Math.max(box.minX, Math.min(box.maxX, point.x));
+    const y = Math.max(box.minY, Math.min(box.maxY, point.y));
+    if ((x - point.x) ** 2 + (y - point.y) ** 2 <= radius2) return { x, y };
   }
-  return distance2 <= radius * radius + 1e-9;
+  for (const x of [box.minX, box.maxX]) for (const y of [box.minY, box.maxY]) {
+    if (pointSegmentDistance2({ x, y }, start, end) <= radius2) return { x, y };
+  }
+  return null;
+}
+
+export function segmentHitsBox(start, end, box, radius) {
+  return capsuleBoxContact(start, end, box, radius) !== null;
 }
 
 const cross = (a, b) => a.x * b.y - a.y * b.x;
