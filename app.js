@@ -3,7 +3,17 @@ const previewArena = new PlayArena();
 setInterval(() => previewArena.step(), 25);
 import { slashAngle as swingAngle, swordPose, SWORD_VIEW } from './combat/duel-motion.js';
 const $ = id => document.getElementById(id);
-const canvas = $('game');
+let canvas = $('game');
+let gl = canvas.getContext('webgl', { alpha: false, antialias: true, stencil: true });
+// Phaser 4 needs instancing and vertex arrays. A canvas with a WebGL context
+// cannot switch to 2D, so replace it before binding input on older devices.
+if (gl && (!gl.getExtension('ANGLE_instanced_arrays') || !gl.getExtension('OES_vertex_array_object'))) {
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+  gl = null;
+  const fallback = canvas.cloneNode(false);
+  canvas.replaceWith(fallback);
+  canvas = fallback;
+}
 const keys = new Set(), pointerActions = { a: new Set(), b: new Set() };
 const sequence = { a: 0, b: 0 }, pressedAt = new Map();
 const inputQueues = { a: Promise.resolve(), b: Promise.resolve() }, crouchPoses = new Map(), guardPoses = new Map();
@@ -16,7 +26,7 @@ const keyMap = {
   PageUp: ['b', 'aimUp'], PageDown: ['b', 'aimDown'],
 };
 let state, previous, receivedAt = 0, previousAt = 0, focused = false, starting = false;
-let frame = 0, seenEvents = new Set(), particles = [], floaters = [], shakeAt = -1000;
+let frame = 0, seenEvents = new Set(), particles = [], floaters = [], pendingImpactAt = null;
 let lastInputError = '', pollFailures = 0, roundStartedAt = 0;
 let mouseAim = null, lastAimSentAt = 0;
 const ink = 0x22282d, paper = 0xfaf9f4;
@@ -36,7 +46,7 @@ function ingest(next) {
   const now = performance.now();
   if (!state || state.matchId !== next.matchId) {
     previous = next; previousAt = now - 50;
-    seenEvents = new Set(); particles = []; floaters = []; lastInputError = ''; crouchPoses.clear(); guardPoses.clear(); mouseAim = null;
+    seenEvents = new Set(); pendingImpactAt = null; particles = []; floaters = []; lastInputError = ''; crouchPoses.clear(); guardPoses.clear(); mouseAim = null;
     roundStartedAt = next.startedAt; sequence.a = 0; sequence.b = 0; $('mode').value = next.mode;
   } else { previous = state; previousAt = receivedAt; }
   state = next; receivedAt = now;
@@ -53,14 +63,13 @@ function ingest(next) {
     seenEvents.add(event.eventId);
     if (event.type === 'combat:hit') {
       const target = next.players.find(p => p.playerId === event.targetId);
-      shakeAt = event.occurredAt;
+      pendingImpactAt = event.occurredAt;
       floaters.push({ x: target.x, y: target.y - 75, startedAt: event.occurredAt, text: `−${event.result.damage}${event.result.guardBypassed ? ' 穿透格挡' : ''}` });
       for (let i = 0; i < 12; i++) particles.push({ x: target.x, y: target.y - 8,
         vx: Math.cos(i * 2.4) * (65 + i * 7), vy: Math.sin(i * 2.4) * (65 + i * 7),
         startedAt: event.occurredAt, life: 450 + i * 15 });
     }
     if (['combat:blocked', 'combat:guard_break'].includes(event.type)) {
-      const target = next.players.find(p => p.playerId === event.targetId);
       const contact = event.result.contact;
       floaters.push({ x: contact.x, y: contact.y - 18, startedAt: event.occurredAt,
         text: event.type === 'combat:blocked' ? '剑挡' : '破防' });
@@ -69,7 +78,7 @@ function ingest(next) {
     }
     if (event.type === 'combat:clash') {
       const point = event.result.contact;
-      shakeAt = event.occurredAt;
+      pendingImpactAt = event.occurredAt;
       floaters.push({ x: point.x, y: point.y - 12, startedAt: event.occurredAt, text: '弹刀' });
       for (let i = 0; i < 16; i++) particles.push({ x: point.x, y: point.y,
         vx: Math.cos(i * 2.4) * (90 + i * 5), vy: Math.sin(i * 2.4) * (90 + i * 5),
@@ -407,9 +416,11 @@ class CombatScene extends Phaser.Scene {
     this.fighters = new Map(['player-a', 'player-b'].map(id => [id, {
       body: this.add.graphics(), label: this.label(id === 'player-a' ? '#22282d' : '#69756b', 12),
     }]));
+    this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     this.sparks = this.add.graphics().setDepth(3);
     this.eventLabels = [];
     canvas.dataset.renderer = 'Phaser ' + Phaser.VERSION;
+    canvas.dataset.backend = this.game.renderer.type === Phaser.WEBGL ? 'WebGL' : 'Canvas';
     poll();
   }
 
@@ -422,11 +433,14 @@ class CombatScene extends Phaser.Scene {
     const t = clamp(age / Math.max(25, receivedAt - previousAt), 0, 1);
     if (this.matchId !== state.matchId) {
       this.matchId = state.matchId;
+      this.cameras.main.shakeEffect.reset();
       drawMap(this, state.arena);
     }
-    const shake = now - shakeAt;
-    this.cameras.main.scrollX = shake >= 0 && shake < 160 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      ? -Math.sin(shake * 0.3) * 3 * (1 - shake / 160) : 0;
+    if (pendingImpactAt !== null) {
+      const remaining = 160 - Math.max(0, now - pendingImpactAt);
+      if (remaining > 0 && !this.reducedMotion.matches) this.cameras.main.shake(remaining, 0.0025, true);
+      pendingImpactAt = null;
+    }
     const item = state.items[0], showItem = !item.holderId;
     this.item.clear();
     this.pickupLabel.setVisible(showItem);
@@ -471,8 +485,9 @@ class CombatScene extends Phaser.Scene {
   }
 }
 
+// Phaser needs an explicit renderer for our existing, keyboard-accessible canvas.
 new Phaser.Game({
-  type: Phaser.CANVAS, width: 1000, height: 640, canvas,
+  type: gl ? Phaser.WEBGL : Phaser.CANVAS, context: gl, width: 1000, height: 640, canvas,
   scale: { mode: Phaser.Scale.NONE }, backgroundColor: paper,
   audio: { noAudio: true }, input: { keyboard: false, mouse: false, touch: false },
   scene: CombatScene,

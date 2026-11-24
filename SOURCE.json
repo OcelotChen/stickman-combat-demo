@@ -1,6 +1,6 @@
 {
   "scope": "D browser-only public playtest",
-  "sourceCommit": "1044f4e446ad1033481bb20cff448ee5aaa8cc55",
-  "phaserVersion": "3.90.0",
+  "sourceCommit": "031bba4a71fad58676ecd45b7cdd3f8af637f869",
+  "phaserVersion": "4.2.1",
   "rulesVersion": "d-duel-draft-0.4"
 }
