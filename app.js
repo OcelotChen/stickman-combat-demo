@@ -3,7 +3,7 @@ const previewArena = new PlayArena();
 setInterval(() => previewArena.step(), 25);
 import { slashAngle as swingAngle, swordPose, SWORD_VIEW } from './combat/duel-motion.js';
 const $ = id => document.getElementById(id);
-const canvas = $('game'), ctx = canvas.getContext('2d');
+const canvas = $('game');
 const keys = new Set(), pointerActions = { a: new Set(), b: new Set() };
 const sequence = { a: 0, b: 0 }, pressedAt = new Map();
 const inputQueues = { a: Promise.resolve(), b: Promise.resolve() }, crouchPoses = new Map(), guardPoses = new Map();
@@ -16,13 +16,12 @@ const keyMap = {
   PageUp: ['b', 'aimUp'], PageDown: ['b', 'aimDown'],
 };
 let state, previous, receivedAt = 0, previousAt = 0, focused = false, starting = false;
-let frame = 0, seenEvents = new Set(), particles = [], floaters = [], shakeAt = -1000, lastFrame = performance.now();
+let frame = 0, seenEvents = new Set(), particles = [], floaters = [], shakeAt = -1000;
 let lastInputError = '', pollFailures = 0, roundStartedAt = 0;
 let mouseAim = null, lastAimSentAt = 0;
-const ink = '#22282d', paper = '#faf9f4';
+const ink = 0x22282d, paper = 0xfaf9f4;
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 const mix = (a, b, t) => a + (b - a) * t;
-const smooth = t => t * t * (3 - 2 * t);
 const playerName = id => id === 'player-a' ? 'P1' : state?.mode === 'ai' ? 'AI' : 'P2';
 
 async function request(path, data) {
@@ -235,28 +234,27 @@ async function poll() {
   setTimeout(poll, pollFailures ? 500 : 40);
 }
 
-function stroke(points, color = ink, width = 3) {
-  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.beginPath(); points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+function stroke(g, points, color = ink, width = 3, alpha = 1) {
+  g.lineStyle(width, color, alpha).beginPath().moveTo(...points[0]);
+  for (const point of points.slice(1)) g.lineTo(...point);
+  g.strokePath();
 }
 
-function sword(x, y, angle, facing, opacity = 1, flash = false) {
-  if (!state) return;
+function sword(g, x, y, angle, facing, opacity = 1, flash = false) {
   const weapon = state.weapons[0], scale = weapon.derivedAttributes.reach * SWORD_VIEW.scale / SWORD_VIEW.span;
-  ctx.save(); ctx.globalAlpha *= opacity; ctx.translate(x, y); ctx.scale(facing, 1); ctx.rotate(angle);
+  g.save().translateCanvas(x, y).scaleCanvas(facing, 1).rotateCanvas(angle);
   for (const path of weapon.drawing.strokes) {
-    const points = path.map(([px, py]) => [(px - SWORD_VIEW.gripX) * scale, (py - SWORD_VIEW.gripY) * scale]);
     const closed = path.length > 3 && path[0][0] === path.at(-1)[0] && path[0][1] === path.at(-1)[1];
-    if (closed) {
-      ctx.beginPath(); points.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
-      ctx.closePath(); ctx.fillStyle = paper; ctx.fill(); ctx.strokeStyle = flash ? '#bd9b4a' : ink; ctx.lineWidth = flash ? 2.3 : 1.6; ctx.stroke();
-    } else stroke(points, flash ? '#bd9b4a' : '#747c73', 1);
+    const points = path.map(([px, py]) => ({ x: (px - SWORD_VIEW.gripX) * scale, y: (py - SWORD_VIEW.gripY) * scale }));
+    if (closed) g.fillStyle(paper, opacity).fillPoints(points, true);
+    g.lineStyle(closed ? (flash ? 2.3 : 1.6) : 1, flash ? 0xbd9b4a : closed ? ink : 0x747c73, opacity)
+      .strokePoints(points, closed);
   }
-  ctx.restore();
+  g.restore();
 }
 
-function drawFighter(player, now) {
-  const direction = player.facing === 'right' ? 1 : -1, color = player.playerId === 'player-a' ? ink : '#69756b';
+function drawFighter(g, label, player, now) {
+  const direction = player.facing === 'right' ? 1 : -1, color = player.playerId === 'player-a' ? ink : 0x69756b;
   const dead = player.hp <= 0, deathProgress = clamp((now - (player.deathAt ?? now)) / 550, 0, 1);
   const walking = player.grounded && Math.abs(player.vx) > 20, stride = walking ? Math.sin(now / 85) : 0;
   const breath = Math.sin(now / 370 + (player.playerId === 'player-a' ? 0 : 1)) * 1.1;
@@ -272,90 +270,82 @@ function drawFighter(player, now) {
   const attackAngle = elapsedMs => clamp(aim + swingAngle(elapsedMs), -Math.PI / 2, Math.PI / 2);
   const headY = mix(-49, 14, crouch), hipY = mix(18, 42, crouch), shoulderY = headY + 23;
   const hurt = now - player.hurtAt < 140;
-  ctx.save();
-  ctx.globalAlpha = dead ? 1 - deathProgress * 0.4 : 1;
-  // The server controls positions; this rotation only animates the defeated body's pose.
-  if (dead) { ctx.translate(player.x, player.y + 63); ctx.rotate(-direction * deathProgress * Math.PI / 2); ctx.translate(0, -63); }
-  else ctx.translate(player.x, player.y + (attacking || guardProgress > 0 ? 0 : walking ? Math.abs(stride) * -2 : breath));
-  if (hurt) ctx.globalAlpha = Math.sin(now / 13) > 0 ? 0.35 : 1;
+  g.clear().setAlpha(hurt && Math.sin(now / 13) > 0 ? 0.35 : dead ? 1 - deathProgress * 0.4 : 1);
+  g.save();
+  if (dead) {
+    g.translateCanvas(player.x, player.y + 63).rotateCanvas(-direction * deathProgress * Math.PI / 2).translateCanvas(0, -63);
+  } else {
+    g.translateCanvas(player.x, player.y + (attacking || guardProgress > 0 ? 0 : walking ? Math.abs(stride) * -2 : breath));
+  }
   const pose = swordPose(player, attacking ? player.swing : null, now, crouch, guardProgress);
   const thrustExtension = pose.extension;
   const lean = rebounding ? -direction * 10 * Math.sin(Math.PI * clamp((now - player.swing.clashedAt) / (player.swing.endsAt - player.swing.clashedAt), 0, 1)) :
     attacking ? direction * mix(-6, thrusting ? 13 : 8, thrusting ? thrustExtension : clamp(elapsed / 220, 0, 1)) :
       pose.guarding > 0 ? -direction * (4 * pose.guarding + 7 * pose.guardRecoil) : charging ? -direction * 5 : walking ? direction * 4 : 0;
-  ctx.fillStyle = paper; ctx.strokeStyle = color; ctx.lineWidth = 3.5;
-  ctx.beginPath(); ctx.arc(lean, headY, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  g.fillStyle(paper).fillCircle(lean, headY, 13).lineStyle(3.5, color).strokeCircle(lean, headY, 13);
   if (dead) {
-    stroke([[-4 + lean, headY - 3], [2 + lean, headY + 3]], color, 1.5); stroke([[-4 + lean, headY + 3], [2 + lean, headY - 3]], color, 1.5);
-  } else { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(lean + direction * 5, headY - 1, 1.7, 0, Math.PI * 2); ctx.fill(); }
-  stroke([[lean, headY + 13], [lean * 0.4, mix(-5, 36, crouch)], [0, hipY]], color, 3.5);
+    stroke(g, [[-4 + lean, headY - 3], [2 + lean, headY + 3]], color, 1.5); stroke(g, [[-4 + lean, headY + 3], [2 + lean, headY - 3]], color, 1.5);
+  } else g.fillStyle(color).fillCircle(lean + direction * 5, headY - 1, 1.7);
+  stroke(g, [[lean, headY + 13], [lean * 0.4, mix(-5, 36, crouch)], [0, hipY]], color, 3.5);
   if (player.grounded || dead) {
     const gait = stride * mix(17, 6, crouch), kneeX = mix(10, 23, crouch), kneeY = mix(40, 52, crouch);
-    stroke([[0, hipY], [-kneeX + gait * 0.65, kneeY], [-16 + gait, 63], [-23 + gait, 63]], color, 3.5);
-    stroke([[0, hipY], [kneeX - gait * 0.65, kneeY], [16 - gait, 63], [23 - gait, 63]], color, 3.5);
+    stroke(g, [[0, hipY], [-kneeX + gait * 0.65, kneeY], [-16 + gait, 63], [-23 + gait, 63]], color, 3.5);
+    stroke(g, [[0, hipY], [kneeX - gait * 0.65, kneeY], [16 - gait, 63], [23 - gait, 63]], color, 3.5);
   } else {
-    stroke([[0, hipY], [-20, 33], [-11, 51], [-20, 51]], color, 3.5);
-    stroke([[0, hipY], [19, 36], [33, 28], [40, 28]], color, 3.5);
+    stroke(g, [[0, hipY], [-20, 33], [-11, 51], [-20, 51]], color, 3.5);
+    stroke(g, [[0, hipY], [19, 36], [33, 28], [40, 28]], color, 3.5);
   }
   const { handX, handY, angle } = pose;
-  stroke([[lean, shoulderY], [mix(direction * 17, handX, 0.35), mix(shoulderY + 20, handY, 0.6)], [handX, handY]], color, 3.5);
-  stroke([[lean, shoulderY], [mix(-direction * 17, direction * 6, pose.guarding), mix(mix(6, 45, crouch), handY + 10, pose.guarding)],
+  stroke(g, [[lean, shoulderY], [mix(direction * 17, handX, 0.35), mix(shoulderY + 20, handY, 0.6)], [handX, handY]], color, 3.5);
+  stroke(g, [[lean, shoulderY], [mix(-direction * 17, direction * 6, pose.guarding), mix(mix(6, 45, crouch), handY + 10, pose.guarding)],
     [mix(-direction * 11, handX - direction * 4, pose.guarding), mix(mix(23, 55, crouch), handY + 6, pose.guarding)]], color, 3.5);
   if (player.equippedWeaponId) {
     if (attacking && !thrusting && !rebounding && elapsed > 120 && elapsed < 270) {
-      ctx.save(); ctx.translate(handX, handY); ctx.scale(direction, 1);
-      ctx.beginPath(); ctx.arc(0, 0, 70, attackAngle(Math.max(120, elapsed - 55)), angle);
-      ctx.strokeStyle = '#74877a50'; ctx.lineWidth = 10; ctx.stroke(); ctx.restore();
-      for (const age of [45, 30, 15]) sword(handX, handY, attackAngle(Math.max(0, elapsed - age)), direction, 0.08);
+      g.save().translateCanvas(handX, handY).scaleCanvas(direction, 1);
+      g.lineStyle(10, 0x74877a, 0.31).beginPath().arc(0, 0, 70, attackAngle(Math.max(120, elapsed - 55)), angle).strokePath().restore();
+      for (const age of [45, 30, 15]) sword(g, handX, handY, attackAngle(Math.max(0, elapsed - age)), direction, 0.08);
     }
     if (thrusting && elapsed < 250) {
-      ctx.save(); ctx.translate(handX, handY); ctx.scale(direction, 1); ctx.rotate(aim);
-      stroke([[-18, 0], [84, 0]], '#b38b5260', 9); stroke([[-30, -8], [57, -8]], '#b38b5240', 2); ctx.restore();
+      g.save().translateCanvas(handX, handY).scaleCanvas(direction, 1).rotateCanvas(aim);
+      stroke(g, [[-18, 0], [84, 0]], 0xb38b52, 9, 0.38);
+      stroke(g, [[-30, -8], [57, -8]], 0xb38b52, 2, 0.25);
+      g.restore();
     }
     if (charging) {
-      ctx.save(); ctx.translate(handX, handY); ctx.beginPath(); ctx.arc(0, 0, 19, -Math.PI / 2, -Math.PI / 2 + chargeProgress * Math.PI * 2);
-      ctx.strokeStyle = chargeProgress === 1 ? '#bd8b3b' : '#92a18b'; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
+      g.lineStyle(3, chargeProgress === 1 ? 0xbd8b3b : 0x92a18b).beginPath()
+        .arc(handX, handY, 19, -Math.PI / 2, -Math.PI / 2 + chargeProgress * Math.PI * 2).strokePath();
       const rule = state.duelRules.thrust, height = mix(rule.height, rule.crouchingHeight, crouch);
-      ctx.save(); ctx.setLineDash([4, 6]);
-      stroke([[0, height], [direction * Math.cos(aim) * state.weapons[0].derivedAttributes.reach * rule.reachScale,
-        height + Math.sin(aim) * state.weapons[0].derivedAttributes.reach * rule.reachScale]], '#b3965560', 1.5); ctx.restore();
+      const reach = state.weapons[0].derivedAttributes.reach * rule.reachScale;
+      g.save().translateCanvas(0, height).scaleCanvas(direction, 1).rotateCanvas(aim).lineStyle(1.5, 0xb39655, 0.38);
+      for (let x = 0; x < reach; x += 10) g.lineBetween(x, 0, Math.min(x + 4, reach), 0);
+      g.restore();
     }
-    sword(handX, handY, angle, direction, 1, now - player.guardHitAt >= 0 && now - player.guardHitAt < 120);
+    sword(g, handX, handY, angle, direction, 1, now - player.guardHitAt >= 0 && now - player.guardHitAt < 120);
   }
-  ctx.restore();
+  g.restore();
+  label.setVisible(!dead);
   if (!dead) {
-    ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.font = '11px system-ui';
-    ctx.fillText(charging ? chargeProgress === 1 ? '蓄力完成 · 松开刺击' :
+    label.setPosition(player.x, player.y + headY - 24).setText(charging ? chargeProgress === 1 ? '蓄力完成 · 松开刺击' :
       `蓄力 ${(chargeProgress * state.duelRules.chargeMs / 1000).toFixed(1)} / ${(state.duelRules.chargeMs / 1000).toFixed(1)}s` :
-      rebounding ? '弹刀' : playerName(player.playerId), player.x, player.y + headY - 24);
+      rebounding ? '弹刀' : playerName(player.playerId));
   }
 }
 
-function drawWorld(now) {
-  const { width, height, groundY } = state.arena;
-  ctx.fillStyle = paper; ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = '#e6e8df'; ctx.lineWidth = 1;
-  for (let x = 0; x < width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 130); ctx.lineTo(x, groundY); ctx.stroke(); }
-  for (let y = 140; y < groundY; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
-  ctx.fillStyle = '#e9ece1'; ctx.fillRect(0, groundY + 2, width, height - groundY);
-  stroke([[0, groundY + 1], [width, groundY + 1]], '#84907f', 2);
-  for (const platform of state.arena.platforms) {
-    ctx.fillStyle = '#e5e9dd'; ctx.fillRect(platform.x, platform.y, platform.width, 9);
-    stroke([[platform.x, platform.y], [platform.x + platform.width, platform.y]], '#8a9683', 2);
-    stroke([[platform.x + 15, platform.y + 12], [platform.x + 4, groundY]], '#cbd2c1', 1);
-    stroke([[platform.x + platform.width - 15, platform.y + 12], [platform.x + platform.width - 4, groundY]], '#cbd2c1', 1);
-    ctx.fillStyle = '#8a9683'; ctx.textAlign = 'center'; ctx.font = '10px system-ui';
-    ctx.fillText('上层 · 跳跃到达', platform.x + platform.width / 2, platform.y + 27);
-  }
-  ctx.textAlign = 'center'; ctx.fillStyle = '#c0c7b9'; ctx.font = '10px system-ui';
-  ctx.fillText('02 / SLASH · THRUST · GUARD', 500, groundY + 70);
-  const item = state.items[0];
-  if (!item.holderId) {
-    ctx.save(); ctx.globalAlpha = state.mode === 'pickup' ? 1 : 0.6;
-    ctx.fillStyle = '#344c3d0c'; ctx.beginPath(); ctx.ellipse(500, groundY - 1, 44, 7, 0, 0, Math.PI * 2); ctx.fill();
-    sword(468, groundY - 18 + Math.sin(now / 310) * 3, -0.12, 1);
-    ctx.fillStyle = '#65775d'; ctx.font = '11px system-ui'; ctx.fillText(state.mode === 'pickup' ? '靠近 · E / . 拾取' : 'E 拾取', 500, groundY + 30);
-    ctx.restore();
+function drawMap(scene, arena) {
+  const g = scene.mapGraphics.clear(), { width, height, groundY } = arena;
+  g.lineStyle(1, 0xe6e8df);
+  for (let x = 0; x < width; x += 40) g.lineBetween(x, 130, x, groundY);
+  for (let y = 140; y < groundY; y += 40) g.lineBetween(0, y, width, y);
+  g.fillStyle(0xe9ece1).fillRect(0, groundY + 2, width, height - groundY);
+  g.lineStyle(2, 0x84907f).lineBetween(0, groundY + 1, width, groundY + 1);
+  for (const label of scene.platformLabels) label.destroy();
+  scene.platformLabels = [];
+  for (const platform of arena.platforms) {
+    const { x, y, width: span } = platform;
+    g.fillStyle(0xe5e9dd).fillRect(x, y, span, 9).lineStyle(2, 0x8a9683).lineBetween(x, y, x + span, y);
+    g.lineStyle(1, 0xcbd2c1).lineBetween(x + 15, y + 12, x + 4, groundY)
+      .lineBetween(x + span - 15, y + 12, x + span - 4, groundY);
+    scene.platformLabels.push(scene.label('#788470', 11).setPosition(x + span / 2, y + 27).setText('上层 · 跳跃到达'));
   }
 }
 
@@ -401,17 +391,51 @@ function renderHud(now) {
   $('error').textContent = lastInputError || results[actionResult] || '';
 }
 
-function render(time) {
-  const dt = Math.min(0.05, Math.max(0, (time - lastFrame) / 1000)); lastFrame = time;
-  if (state) {
-    const now = state.now + Math.min(150, time - receivedAt);
-    const t = clamp((time - receivedAt) / Math.max(25, receivedAt - previousAt), 0, 1);
-    ctx.save();
-    const shake = now - shakeAt;
-    if (shake >= 0 && shake < 160 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      ctx.translate(Math.sin(shake * 0.3) * 3 * (1 - shake / 160), 0);
+class CombatScene extends Phaser.Scene {
+  constructor() { super('Duel'); }
+
+  label(color, size) {
+    return this.add.text(0, 0, '', { fontFamily: 'system-ui, sans-serif', fontSize: size + 'px', color })
+      .setOrigin(0.5, 1).setDepth(2);
+  }
+
+  create() {
+    this.mapGraphics = this.add.graphics();
+    this.platformLabels = [];
+    this.item = this.add.graphics();
+    this.pickupLabel = this.label('#65775d', 11);
+    this.fighters = new Map(['player-a', 'player-b'].map(id => [id, {
+      body: this.add.graphics(), label: this.label(id === 'player-a' ? '#22282d' : '#69756b', 12),
+    }]));
+    this.sparks = this.add.graphics().setDepth(3);
+    this.eventLabels = [];
+    canvas.dataset.renderer = 'Phaser ' + Phaser.VERSION;
+    poll();
+  }
+
+  update(time, delta) {
+    if (!state) return;
+    const dt = Math.min(0.05, delta / 1000);
+    // Snapshot arrivals use the browser clock, independently of Phaser's smoothed delta.
+    const age = Math.max(0, performance.now() - receivedAt);
+    const now = state.now + Math.min(150, age);
+    const t = clamp(age / Math.max(25, receivedAt - previousAt), 0, 1);
+    if (this.matchId !== state.matchId) {
+      this.matchId = state.matchId;
+      drawMap(this, state.arena);
     }
-    drawWorld(now);
+    const shake = now - shakeAt;
+    this.cameras.main.scrollX = shake >= 0 && shake < 160 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? -Math.sin(shake * 0.3) * 3 * (1 - shake / 160) : 0;
+    const item = state.items[0], showItem = !item.holderId;
+    this.item.clear();
+    this.pickupLabel.setVisible(showItem);
+    if (showItem) {
+      const groundY = state.arena.groundY;
+      this.item.fillStyle(0x344c3d, 0.05).fillEllipse(item.x, groundY - 1, 88, 14);
+      sword(this.item, item.x - 32, groundY - 18 + Math.sin(now / 310) * 3, -0.12, 1, state.mode === 'pickup' ? 1 : 0.6);
+      this.pickupLabel.setPosition(item.x, groundY + 30).setText(state.mode === 'pickup' ? '靠近 · E / . 拾取' : 'E 拾取');
+    }
     for (const player of state.players) {
       const before = previous.players.find(p => p.playerId === player.playerId) || player;
       const pose = crouchPoses.get(player.playerId) || 0;
@@ -421,24 +445,35 @@ function render(time) {
       const guardAge = now - player.guardHitAt;
       guardPoses.set(player.playerId, guardAge >= 0 && guardAge < SWORD_VIEW.guardRecoilMs ? 1 :
         clamp(guardPose + (player.blocking ? guardStep : -guardStep), 0, 1));
-      drawFighter({ ...player, x: mix(before.x, player.x, t), y: mix(before.y, player.y, t) }, now);
+      const fighter = this.fighters.get(player.playerId);
+      drawFighter(fighter.body, fighter.label, { ...player, x: mix(before.x, player.x, t), y: mix(before.y, player.y, t) }, now);
     }
     particles = particles.filter(particle => now - particle.startedAt < particle.life);
+    const g = this.sparks.clear();
     for (const particle of particles) {
       particle.x += particle.vx * dt; particle.y += particle.vy * dt; particle.vy += 270 * dt;
-      ctx.globalAlpha = clamp(1 - (now - particle.startedAt) / particle.life, 0, 1);
-      stroke([[particle.x, particle.y], [particle.x - particle.vx * 0.025, particle.y - particle.vy * 0.025]], particle.guard ? '#b18b43' : '#455a43', 1.7);
+      const alpha = clamp(1 - (now - particle.startedAt) / particle.life, 0, 1);
+      g.lineStyle(1.7, particle.guard ? 0xb18b43 : 0x455a43, alpha)
+        .lineBetween(particle.x, particle.y, particle.x - particle.vx * 0.025, particle.y - particle.vy * 0.025);
     }
-    ctx.globalAlpha = 1;
     floaters = floaters.filter(floater => now - floater.startedAt < 850);
-    for (const floater of floaters) {
-      const elapsed = now - floater.startedAt;
-      ctx.globalAlpha = clamp(1 - elapsed / 850, 0, 1); ctx.font = '600 20px system-ui';
-      ctx.textAlign = 'center'; ctx.fillStyle = '#38604a'; ctx.fillText(floater.text, floater.x, floater.y - elapsed * 0.04);
+    for (let i = 0; i < Math.max(floaters.length, this.eventLabels.length); i++) {
+      const floater = floaters[i];
+      const label = this.eventLabels[i] ??= this.label('#38604a', 20).setDepth(4);
+      label.setVisible(Boolean(floater));
+      if (floater) {
+        const elapsed = now - floater.startedAt;
+        label.setAlpha(clamp(1 - elapsed / 850, 0, 1)).setPosition(floater.x, floater.y - elapsed * 0.04).setText(floater.text);
+      }
     }
-    ctx.restore(); renderHud(now);
+    renderHud(now);
     canvas.dataset.frame = String(++frame); canvas.dataset.phase = state.phase;
   }
-  requestAnimationFrame(render);
 }
-poll(); requestAnimationFrame(render);
+
+new Phaser.Game({
+  type: Phaser.CANVAS, width: 1000, height: 640, canvas,
+  scale: { mode: Phaser.Scale.NONE }, backgroundColor: paper,
+  audio: { noAudio: true }, input: { keyboard: false, mouse: false, touch: false },
+  scene: CombatScene,
+});

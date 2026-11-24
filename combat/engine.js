@@ -264,6 +264,10 @@ export class CombatEngine {
   }
 
   #resolveHit(actor, target, weapon, now, swingId, swing) {
+    if (now < (target.invulnerableUntil ?? 0)) {
+      const result = { hit: false, damage: 0, killed: false, hpBefore: target.hp, hpAfter: target.hp, missReason: 'INVULNERABLE', ...(swingId ? { swingId } : {}) };
+      return { accepted: true, result, events: [this.#event('combat:miss', actor.playerId, target.playerId, weapon.weaponId, now, result)], replayed: false };
+    }
     if (this.#duel) return this.#resolveDuelHit(actor, target, weapon, now, swing);
     const stats = weapon.derivedAttributes, dx = target.x - actor.x, dy = target.y - actor.y;
     const inRange = Math.hypot(dx, dy) <= stats.reach + target.radius;
@@ -329,7 +333,7 @@ export class CombatEngine {
 
   #swingFailure(swing) {
     const actor = this.#players.get(swing.actorId), target = this.#players.get(swing.targetId), weapon = this.#weapons.get(swing.weaponId);
-    return this.#state !== 'playing' ? 'MATCH_NOT_PLAYING' : actor.hp <= 0 ? 'PLAYER_DEAD' :
+    return !actor || !target ? 'UNKNOWN_PLAYER' : this.#state !== 'playing' ? 'MATCH_NOT_PLAYING' : actor.hp <= 0 ? 'PLAYER_DEAD' :
       target.hp <= 0 ? 'INVALID_TARGET' : weapon.reviewStatus !== 'approved' ? 'WEAPON_NOT_APPROVED' :
       actor.equippedWeaponId !== swing.weaponId ? 'WEAPON_NOT_EQUIPPED' : null;
   }
